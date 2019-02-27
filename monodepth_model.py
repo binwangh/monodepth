@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # Copyright UCL Business plc 2017. Patent Pending. All rights reserved. 
 #
 # The MonoDepth Software is licensed under the terms of the UCLB ACP-A licence
@@ -21,6 +23,7 @@ import tensorflow.contrib.slim as slim
 
 from bilinear_sampler import *
 
+# 第一个是类名，不是参数
 monodepth_parameters = namedtuple('parameters', 
                         'encoder, '
                         'height, width, '
@@ -35,6 +38,7 @@ monodepth_parameters = namedtuple('parameters',
                         'lr_loss_weight, '
                         'full_summary')
 
+# 
 class MonodepthModel(object):
     """monodepth model"""
 
@@ -63,18 +67,22 @@ class MonodepthModel(object):
     def gradient_y(self, img):
         gy = img[:,:-1,:,:] - img[:,1:,:,:]
         return gy
-
+    
+    # 按照相应的倍数进行采样，采样使用最近邻域的方法，还可以操作feature map吗？？？
+    # 像素值不乘以倍数
     def upsample_nn(self, x, ratio):
         s = tf.shape(x)
         h = s[1]
         w = s[2]
         return tf.image.resize_nearest_neighbor(x, [h * ratio, w * ratio])
-
+    
+    # 图像金字塔列表，逐个缩放？？？
     def scale_pyramid(self, img, num_scales):
         scaled_imgs = [img]
         s = tf.shape(img)
         h = s[1]
         w = s[2]
+        # 循环不包括(num_scales-1)，即[0, num_scales-1)
         for i in range(num_scales - 1):
             ratio = 2 ** (i + 1)
             nh = h // ratio
@@ -82,9 +90,10 @@ class MonodepthModel(object):
             scaled_imgs.append(tf.image.resize_area(img, [nh, nw]))
         return scaled_imgs
 
+    # 根据右图和视差图生成新的左图
     def generate_image_left(self, img, disp):
         return bilinear_sampler_1d_h(img, -disp)
-
+    # 根据左图和视差图生成新的右图
     def generate_image_right(self, img, disp):
         return bilinear_sampler_1d_h(img, disp)
 
@@ -120,25 +129,39 @@ class MonodepthModel(object):
         smoothness_y = [disp_gradients_y[i] * weights_y[i] for i in range(4)]
         return smoothness_x + smoothness_y
 
+    # 此时的视差map通道数是2，应该就是左右两个视差的概念
+    # 为什么要乘以 0.3 呢？应该也是后期Loss在调控吧？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？？
+    # sigmoid映射区间是[0 ～～～ 1]
     def get_disp(self, x):
         disp = 0.3 * self.conv(x, 2, 3, 1, tf.nn.sigmoid)
         return disp
 
+    # 二维卷积操作：根据卷积核大小，用pad填充
     def conv(self, x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu):
         p = np.floor((kernel_size - 1) / 2).astype(np.int32)
         p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]])
         return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn)
-
+    
+    # conv块：包含两个卷积，步长分别为1和2
+    # 每进行一次conv_block操作，H和W缩放一倍。
     def conv_block(self, x, num_out_layers, kernel_size):
         conv1 = self.conv(x,     num_out_layers, kernel_size, 1)
         conv2 = self.conv(conv1, num_out_layers, kernel_size, 2)
         return conv2
-
+    
+    # maxpool操作：pad填充，pool-MAX操作即可
+    # slim中默认步长为2
     def maxpool(self, x, kernel_size):
         p = np.floor((kernel_size - 1) / 2).astype(np.int32)
         p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]])
         return slim.max_pool2d(p_x, kernel_size)
 
+    # 残差操作：如果输入的维度不等于num_layers，对输入进行1x1卷积操作，使得维度为4×num_layers？？？？？？？？
+    # 简单例子：
+    # 输入256-d
+    # 1x1 64 + relu
+    # 3x3 64 + relu
+    # （1x1 256 + 输入[1x1卷积操作]） + relu
     def resconv(self, x, num_layers, stride):
         do_proj = tf.shape(x)[3] != num_layers or stride == 2
         shortcut = []
@@ -151,6 +174,7 @@ class MonodepthModel(object):
             shortcut = x
         return tf.nn.elu(conv3 + shortcut)
 
+    # 残差块：包含（num_blocks+1）个残差操作
     def resblock(self, x, num_layers, num_blocks):
         out = x
         for i in range(num_blocks - 1):
@@ -158,6 +182,8 @@ class MonodepthModel(object):
         out = self.resconv(out, num_layers, 2)
         return out
 
+    # 先进行上采样（按倍数），再进行卷积？？？
+    # 这个和DispNet中的反卷积一样吗？？？
     def upconv(self, x, num_out_layers, kernel_size, scale):
         upsample = self.upsample_nn(x, scale)
         conv = self.conv(upsample, num_out_layers, kernel_size, 1)
@@ -286,13 +312,17 @@ class MonodepthModel(object):
             self.disp1 = self.get_disp(iconv1)
 
     def build_model(self):
+        # slim是一种轻量级的tensorflow库，可以使模型的构建，训练，测试都变得更加简单
+        # 用 slim.arg_scope（）为目标函数设置默认参数
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose], activation_fn=tf.nn.elu):
             with tf.variable_scope('model', reuse=self.reuse_variables):
-
+                
+                # 图像金字塔列表？？？尺寸都不一样啊。。。下步后怎么操作啊？？？
                 self.left_pyramid  = self.scale_pyramid(self.left,  4)
                 if self.mode == 'train':
                     self.right_pyramid = self.scale_pyramid(self.right, 4)
 
+                # 网络的输入：model_input
                 if self.params.do_stereo:
                     self.model_input = tf.concat([self.left, self.right], 3)
                 else:
@@ -310,6 +340,7 @@ class MonodepthModel(object):
         # STORE DISPARITIES
         with tf.variable_scope('disparities'):
             self.disp_est  = [self.disp1, self.disp2, self.disp3, self.disp4]
+            # 扩展维度：shape
             self.disp_left_est  = [tf.expand_dims(d[:,:,:,0], 3) for d in self.disp_est]
             self.disp_right_est = [tf.expand_dims(d[:,:,:,1], 3) for d in self.disp_est]
 
@@ -322,6 +353,7 @@ class MonodepthModel(object):
             self.right_est = [self.generate_image_right(self.left_pyramid[i], self.disp_right_est[i]) for i in range(4)]
 
         # LR CONSISTENCY
+        # 视差图的一致性
         with tf.variable_scope('left-right'):
             self.right_to_left_disp = [self.generate_image_left(self.disp_right_est[i], self.disp_left_est[i])  for i in range(4)]
             self.left_to_right_disp = [self.generate_image_right(self.disp_left_est[i], self.disp_right_est[i]) for i in range(4)]

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # Copyright UCL Business plc 2017. Patent Pending. All rights reserved.
 #
 # The MonoDepth Software is licensed under the terms of the UCLB ACP-A licence
@@ -12,6 +14,7 @@ from __future__ import absolute_import, division, print_function
 # only keep warnings and errors
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL']='1'
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 
 import numpy as np
 import argparse
@@ -20,18 +23,22 @@ import time
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
+# 从同一个目录下的×××.py文件中导入相应的函数
 from monodepth_model import *
 from monodepth_dataloader import *
 from average_gradients import *
 
+# 命令行参数
 parser = argparse.ArgumentParser(description='Monodepth TensorFlow implementation.')
-
+# python monodepth_main.py --mode train 
+# --model_name my_model 
+# --data_path ../dataStereo/ 
+# --filenames_file ../dataStereo/trainfilenames_stereo.txt 
+# --log_directory ./tmp/
 parser.add_argument('--mode',                      type=str,   help='train or test', default='train')
 parser.add_argument('--model_name',                type=str,   help='model name', default='monodepth')
 parser.add_argument('--encoder',                   type=str,   help='type of encoder, vgg or resnet50', default='vgg')
 parser.add_argument('--dataset',                   type=str,   help='dataset to train on, kitti, or cityscapes', default='kitti')
-parser.add_argument('--data_path',                 type=str,   help='path to the data', required=True)
-parser.add_argument('--filenames_file',            type=str,   help='path to the filenames text file', required=True)
 parser.add_argument('--input_height',              type=int,   help='input height', default=256)
 parser.add_argument('--input_width',               type=int,   help='input width', default=512)
 parser.add_argument('--batch_size',                type=int,   help='batch size', default=8)
@@ -40,16 +47,20 @@ parser.add_argument('--learning_rate',             type=float, help='initial lea
 parser.add_argument('--lr_loss_weight',            type=float, help='left-right consistency weight', default=1.0)
 parser.add_argument('--alpha_image_loss',          type=float, help='weight between SSIM and L1 in the image loss', default=0.85)
 parser.add_argument('--disp_gradient_loss_weight', type=float, help='disparity smoothness weigth', default=0.1)
-parser.add_argument('--do_stereo',                             help='if set, will train the stereo model', action='store_true')
 parser.add_argument('--wrap_mode',                 type=str,   help='bilinear sampler wrap mode, edge or border', default='border')
-parser.add_argument('--use_deconv',                            help='if set, will use transposed convolutions', action='store_true')
 parser.add_argument('--num_gpus',                  type=int,   help='number of GPUs to use for training', default=1)
 parser.add_argument('--num_threads',               type=int,   help='number of threads to use for data loading', default=8)
 parser.add_argument('--output_directory',          type=str,   help='output directory for test disparities, if empty outputs to checkpoint folder', default='')
 parser.add_argument('--log_directory',             type=str,   help='directory to save checkpoints and summaries', default='')
 parser.add_argument('--checkpoint_path',           type=str,   help='path to a specific checkpoint to load', default='')
+
 parser.add_argument('--retrain',                               help='if used with checkpoint_path, will restart training from step zero', action='store_true')
 parser.add_argument('--full_summary',                          help='if set, will keep more data for each summary. Warning: the file can become very large', action='store_true')
+parser.add_argument('--do_stereo',                             help='if set, will train the stereo model', action='store_true')
+parser.add_argument('--use_deconv',                            help='if set, will use transposed convolutions', action='store_true')
+
+parser.add_argument('--data_path',                 type=str,   help='path to the data', required=True)
+parser.add_argument('--filenames_file',            type=str,   help='path to the filenames text file', required=True)
 
 args = parser.parse_args()
 
@@ -63,6 +74,7 @@ def post_process_disparity(disp):
     r_mask = np.fliplr(l_mask)
     return r_mask * l_disp + l_mask * r_disp + (1.0 - l_mask - r_mask) * m_disp
 
+# 文件列表，返回行个数
 def count_text_lines(file_path):
     f = open(file_path, 'r')
     lines = f.readlines()
@@ -72,17 +84,20 @@ def count_text_lines(file_path):
 def train(params):
     """Training loop."""
 
+    # ??????
     with tf.Graph().as_default(), tf.device('/cpu:0'):
 
+        # ??????
         global_step = tf.Variable(0, trainable=False)
 
         # OPTIMIZER
+        # 导入训练文件的路径名，按照行进行读取；返回：文件中的行数，即双目训练集的数目
         num_training_samples = count_text_lines(args.filenames_file)
-
+                
         steps_per_epoch = np.ceil(num_training_samples / params.batch_size).astype(np.int32)
         num_total_steps = params.num_epochs * steps_per_epoch
         start_learning_rate = args.learning_rate
-
+        # 针对学习率，使用分阶段模式，直接看piecewise_constant()函数定义即可，写的非常详细
         boundaries = [np.int32((3/5) * num_total_steps), np.int32((4/5) * num_total_steps)]
         values = [args.learning_rate, args.learning_rate / 2, args.learning_rate / 4]
         learning_rate = tf.train.piecewise_constant(global_step, boundaries, values)
@@ -90,19 +105,34 @@ def train(params):
         opt_step = tf.train.AdamOptimizer(learning_rate)
 
         print("total number of samples: {}".format(num_training_samples))
-        print("total number of steps: {}".format(num_total_steps))
+        print("total number of epochs: {}".format(params.num_epochs))
+        print("total number of steps_per_epoch: {}".format(steps_per_epoch))
+        print("total number of num_total_steps: {}".format(num_total_steps))
+        print("total number of batch_size: {}".format(params.batch_size))
 
+        # --data_path ../dataStereo/ 
+        # --filenames_file ../dataStereo/trainfilenames_stereo.txt
+        # 数据处理类：包含数据增强等操作，根据Epoch得到Tensorflow的数据
         dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
         left  = dataloader.left_image_batch
         right = dataloader.right_image_batch
 
         # split for each gpu
+        with tf.Session() as sess:
+            print("tf.shape(left)[0]: ", sess.run(tf.shape(left)[0]))
+            print("tf.shape(left)[1]: ", sess.run(tf.shape(left)[1]))
+            print("tf.shape(left)[2]: ", sess.run(tf.shape(left)[2]))
+            print("tf.shape(left)[3]:", sess.run(tf.shape(left)[3]))
+            print("total number of num_gpus: {}".format(args.num_gpus))
+        # 按照num_gpus切分batch_size：应该四维变成多个四维，存在某个GPU的导入多张影像
         left_splits  = tf.split(left,  args.num_gpus, 0)
         right_splits = tf.split(right, args.num_gpus, 0)
 
+        # 多个批次，多个GPU：loss和对应的梯度列表
         tower_grads  = []
         tower_losses = []
         reuse_variables = None
+        # 在每个GPU上计算梯度后，合并所有梯度求均值
         with tf.variable_scope(tf.get_variable_scope()):
             for i in range(args.num_gpus):
                 with tf.device('/gpu:%d' % i):
@@ -117,7 +147,8 @@ def train(params):
                     grads = opt_step.compute_gradients(loss)
 
                     tower_grads.append(grads)
-
+        
+        # 多个批次，多个GPU：loss和对应的梯度列表的平均值
         grads = average_gradients(tower_grads)
 
         apply_gradient_op = opt_step.apply_gradients(grads, global_step=global_step)
@@ -133,7 +164,9 @@ def train(params):
         sess = tf.Session(config=config)
 
         # SAVER
+        # 可视化使用
         summary_writer = tf.summary.FileWriter(args.log_directory + '/' + args.model_name, sess.graph)
+        # 保存模型参数
         train_saver = tf.train.Saver()
 
         # COUNT PARAMS
@@ -146,9 +179,11 @@ def train(params):
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         coordinator = tf.train.Coordinator()
+        # 创建样例队列！！！
         threads = tf.train.start_queue_runners(sess=sess, coord=coordinator)
 
         # LOAD CHECKPOINT IF SET
+        # retrain时使用
         if args.checkpoint_path != '':
             train_saver.restore(sess, args.checkpoint_path.split(".")[0])
 
@@ -228,6 +263,7 @@ def test(params):
 
 def main(_):
 
+    # monodepth参数信息，通过namedtuple()来定义
     params = monodepth_parameters(
         encoder=args.encoder,
         height=args.input_height,
@@ -243,6 +279,8 @@ def main(_):
         lr_loss_weight=args.lr_loss_weight,
         full_summary=args.full_summary)
 
+    # print(params)
+    
     if args.mode == 'train':
         train(params)
     elif args.mode == 'test':
