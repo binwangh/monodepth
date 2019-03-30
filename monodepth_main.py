@@ -112,6 +112,7 @@ def train(params):
 
         # --data_path ../dataStereo/ 
         # --filenames_file ../dataStereo/trainfilenames_stereo.txt
+        # args.dataset  default='kitti'
         # 数据处理类：包含数据增强等操作，根据Epoch得到Tensorflow的数据
         dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
         left  = dataloader.left_image_batch
