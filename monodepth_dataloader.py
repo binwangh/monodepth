@@ -16,6 +16,8 @@
 from __future__ import absolute_import, division, print_function
 import tensorflow as tf
 
+# py_func:给定一个 python 函数 func,
+# 它将numpy数组作为其输入,并将 numpy 数组作为其输出返回,将此函数作为一个TensorFlow图中的操作来包装
 def string_length_tf(t):
   return tf.py_func(len, [t], [tf.int64])
 
@@ -38,6 +40,7 @@ class MonodepthDataloader(object):
         _, line = line_reader.read(input_queue)
 
         split_line = tf.string_split([line]).values
+
         # 2）编码解码
         # we load only one image for test, except if we trained a stereo model
         if mode == 'test' and not self.params.do_stereo:
@@ -109,7 +112,9 @@ class MonodepthDataloader(object):
 
         return left_image_aug, right_image_aug
 
-    # 按照jpg和png的格式读取图像，转化为float32，并归一化（也就是说输入图像可以不一样，内部归一化啦）
+    # 按照jpg or png的格式读取图像
+    # 转化为float32，并归一化[0,1]
+    # resize: height, width
     def read_image(self, image_path):
         # tf.decode_image does not return the image size, this is an ugly workaround to handle both jpeg and png
         # jpg和png的解码方式不一样
