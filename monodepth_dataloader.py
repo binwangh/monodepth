@@ -16,12 +16,13 @@
 from __future__ import absolute_import, division, print_function
 import tensorflow as tf
 
-# py_func:给定一个 python 函数 func,
-# 它将numpy数组作为其输入,并将 numpy 数组作为其输出返回,将此函数作为一个TensorFlow图中的操作来包装
+# TensorFlow 包装python函数(包装用于TensorFlow操作的Python函数)
+# TensorFlow 提供允许您将 python/numpy 函数包装为 TensorFlow 运算符
+# 给定一个 python 函数 func,它将 numpy 数组作为其输入,并将 numpy 数组作为其输出返回,将此函数作为一个 TensorFlow 图中的操作来包装.
 def string_length_tf(t):
   return tf.py_func(len, [t], [tf.int64])
 
-# 读取数据的类
+# 读取数据的类:将数据导入TensorFlow中
 class MonodepthDataloader(object):
     """monodepth dataloader"""
 
@@ -36,12 +37,14 @@ class MonodepthDataloader(object):
 
         # 1）创建文件名队列（Queue）
         input_queue = tf.train.string_input_producer([filenames_file], shuffle=False)
+        
+        # 2）用于文件格式的读取器
         line_reader = tf.TextLineReader()
         _, line = line_reader.read(input_queue)
 
         split_line = tf.string_split([line]).values
 
-        # 2）编码解码
+        # 3）读取用于读取记录的解码器
         # we load only one image for test, except if we trained a stereo model
         if mode == 'test' and not self.params.do_stereo:
             left_image_path  = tf.string_join([self.data_path, split_line[0]])
@@ -52,7 +55,9 @@ class MonodepthDataloader(object):
             left_image_o  = self.read_image(left_image_path)
             right_image_o = self.read_image(right_image_path)
 
+        # 4）预处理和批量处理
         if mode == 'train':
+            # 4.1）预处理阶段
             # randomly flip images
             # 根据随机数翻转图像（左右翻转-Width方向上），然后将右视图变成左视图
             do_flip = tf.random_uniform([], 0, 1)
@@ -67,7 +72,7 @@ class MonodepthDataloader(object):
             left_image.set_shape( [None, None, 3])
             right_image.set_shape([None, None, 3])
 
-            # 3）创建样例队列
+            # 4.2）创建样例队列：批量处理
             # capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
             min_after_dequeue = 2048
             capacity = min_after_dequeue + 4 * params.batch_size

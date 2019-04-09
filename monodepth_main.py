@@ -84,20 +84,28 @@ def count_text_lines(file_path):
 def train(params):
     """Training loop."""
 
-    # ??????
     with tf.Graph().as_default(), tf.device('/cpu:0'):
 
-        # ??????
         global_step = tf.Variable(0, trainable=False)
 
         # OPTIMIZER
         # 导入训练文件的路径名，按照行进行读取；返回：文件中的行数，即双目训练集的数目
         num_training_samples = count_text_lines(args.filenames_file)
-                
+
+        # 获得总的循环次数  
         steps_per_epoch = np.ceil(num_training_samples / params.batch_size).astype(np.int32)
         num_total_steps = params.num_epochs * steps_per_epoch
-        start_learning_rate = args.learning_rate
+        
+        start_learning_rate = args.learning_rate                 # 没用到！！！
+        
         # 针对学习率，使用分阶段模式，直接看piecewise_constant()函数定义即可，写的非常详细
+        #     Example: use a learning rate that's 1.0 for the first 100000 steps, 0.5
+        #     for steps 100001 to 110000, and 0.1 for any additional steps.
+
+        #   global_step = tf.Variable(0, trainable=False)
+        #   boundaries = [100000, 110000]
+        #   values = [1.0, 0.5, 0.1]
+        #   learning_rate = tf.train.piecewise_constant(global_step, boundaries, values)
         boundaries = [np.int32((3/5) * num_total_steps), np.int32((4/5) * num_total_steps)]
         values = [args.learning_rate, args.learning_rate / 2, args.learning_rate / 4]
         learning_rate = tf.train.piecewise_constant(global_step, boundaries, values)
@@ -105,10 +113,7 @@ def train(params):
         opt_step = tf.train.AdamOptimizer(learning_rate)
 
         print("total number of samples: {}".format(num_training_samples))
-        print("total number of epochs: {}".format(params.num_epochs))
-        print("total number of steps_per_epoch: {}".format(steps_per_epoch))
         print("total number of num_total_steps: {}".format(num_total_steps))
-        print("total number of batch_size: {}".format(params.batch_size))
 
         # --data_path ../dataStereo/ 
         # --filenames_file ../dataStereo/trainfilenames_stereo.txt
@@ -119,12 +124,12 @@ def train(params):
         right = dataloader.right_image_batch
 
         # split for each gpu
-        with tf.Session() as sess:
-            print("tf.shape(left)[0]: ", sess.run(tf.shape(left)[0]))
-            print("tf.shape(left)[1]: ", sess.run(tf.shape(left)[1]))
-            print("tf.shape(left)[2]: ", sess.run(tf.shape(left)[2]))
-            print("tf.shape(left)[3]:", sess.run(tf.shape(left)[3]))
-            print("total number of num_gpus: {}".format(args.num_gpus))
+        # with tf.Session() as sess:
+        #     print("tf.shape(left)[0]: ", sess.run(tf.shape(left)[0]))
+        #     print("tf.shape(left)[1]: ", sess.run(tf.shape(left)[1]))
+        #     print("tf.shape(left)[2]: ", sess.run(tf.shape(left)[2]))
+        #     print("tf.shape(left)[3]:", sess.run(tf.shape(left)[3]))
+        #     print("total number of num_gpus: {}".format(args.num_gpus))
         # 按照num_gpus切分batch_size：应该四维变成多个四维，存在某个GPU的导入多张影像
         left_splits  = tf.split(left,  args.num_gpus, 0)
         right_splits = tf.split(right, args.num_gpus, 0)
@@ -132,7 +137,7 @@ def train(params):
         # 多个批次，多个GPU：loss和对应的梯度列表
         tower_grads  = []
         tower_losses = []
-        reuse_variables = None
+        reuse_variables = None                          # 多个GPU之间共享参数
         # 在每个GPU上计算梯度后，合并所有梯度求均值
         with tf.variable_scope(tf.get_variable_scope()):
             for i in range(args.num_gpus):
@@ -170,7 +175,7 @@ def train(params):
         # 保存模型参数
         train_saver = tf.train.Saver()
 
-        # COUNT PARAMS
+        # COUNT PARAMS 统计参数数量
         total_num_parameters = 0
         for variable in tf.trainable_variables():
             total_num_parameters += np.array(variable.get_shape().as_list()).prod()
@@ -179,8 +184,8 @@ def train(params):
         # INIT
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
-        coordinator = tf.train.Coordinator()
         # 创建样例队列！！！
+        coordinator = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coordinator)
 
         # LOAD CHECKPOINT IF SET
